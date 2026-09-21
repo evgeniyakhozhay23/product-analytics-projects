@@ -1,0 +1,49 @@
+WITH delivered_orders_count AS(
+  SELECT
+    customer_id,
+    COUNT(order_id) AS orders_count,
+    AVG(EXTRACT(EPOCH FROM (order_delivered_customer_time - order_created_time)) / 86400.0) AS avg_delivery_days
+  FROM
+    orders
+  WHERE
+    order_status = 'Delivered'
+  GROUP BY
+    customer_id
+), --первый подзапрос
+purchases_count AS(
+  SELECT
+    customer_id,
+    COUNT(event_type) AS purchase_events_count
+  FROM
+    customer_actions
+  WHERE
+    event_type = 'Purchase' --число событий покупки — Purchase
+  GROUP BY
+    customer_id
+) --второй подзапрос
+SELECT
+  c.customer_id,
+  c.customer_city,
+  CAST(c.created_at AS DATE) AS registration_date, --преобразование в дату
+  '2024-03-31' - c.created_at AS days_since_registration,--число дней с даты регистрации
+  COALESCE(d.orders_count, 0) AS orders_count,
+  d.avg_delivery_days, 
+  COALESCE(p.purchase_events_count, 0) AS purchase_events_count,
+  --заполняем пустоты в таблице через функцию COALESCE
+  --coalesce нужен, так как далее будут условия на количество доставленных заказов
+  
+CASE --выполнение сегментации клиентов по заданным условиям
+  WHEN COALESCE(d.orders_count, 0) >= 3 THEN 'Постоянный'
+  WHEN COALESCE(d.orders_count, 0) = 2
+    OR COALESCE(d.orders_count, 0) = 1 THEN 'Разовый'
+  WHEN COALESCE(d.orders_count, 0) = 0
+    AND ('2024-03-31' - c.created_at) > 30 THEN 'Неактивный'
+  WHEN COALESCE(d.orders_count, 0) = 0
+    AND ('2024-03-31' - c.created_at) <= 30 THEN 'Новый'
+  ELSE NULL
+END AS segment
+FROM
+  customers c 
+LEFT JOIN delivered_orders_count d USING(customer_id)
+LEFT JOIN purchases_count p USING(customer_id)
+-- left join оставит всех клиентов, а не только тех, кто совершил покупку и чей заказ был доставлен
